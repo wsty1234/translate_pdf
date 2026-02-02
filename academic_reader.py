@@ -296,53 +296,61 @@ class AcademicPDFReader:
         print(f"  📝 正在提取第 {page_num} 页的英文文本（跳过图表文字）...")
         
         prompt = f"""请仔细分析这张学术论文页面的图片，提取页面上的所有英文文本内容。
-
-**重要：提取范围要求**
-1. **只提取正文文字**，不包括：
-   - ❌ 图片（Figure）中的文字（如图表标签、坐标轴文字等）
-   - ❌ 表格（Table）中的文字（如单元格内容、表头文字等）
-   - ❌ 图片和表格的标题（Figure X:, Table X:）——这些会单独处理\
-   - ❌ 页眉页脚
-
-2. **只提取以下文字内容**：
-   - ✓ 标题（Title, Section headers等）
-   - ✓ 正文段落
-   - ✓ 摘要（Abstract）
-   - ✓ 引言（Introduction）
-   - ✓ 方法描述
-   - ✓ 结果讨论
-   - ✓ 结论
-   - ✓ 参考文献引用标记
-
-3. **阅读顺序要求**（重要）：
-   - 如果页面是**双栏布局**（左右两栏）：
-     * 先完整提取**左栏**所有内容（从上到下）
-     * 然后提取**右栏**所有内容（从上到下）
-     * 不要混排左右栏的内容
-   - 如果页面是**单栏布局**：
-     * 按正常从上到下顺序提取
-
-4. **格式要求**：
-   - 使用Markdown格式
-   - 标题用 # ## ### 标记
-   - 段落之间保留空行
-   - 数学公式保留 LaTeX 格式 $...$ 或 $$...$$
-
-5. **标注插图和表格位置**：
-   - 在插图出现的位置标记：[FIGURE: Figure 1]
-   - 在表格出现的位置标记：[TABLE: Table 1]
-   - 但**不要提取图表内部的文字**
-
-请直接返回提取的文本，使用Markdown格式。不要添加解释。"""
+ 
+ **重要：提取范围要求**
+ 1. **只提取正文文字**，不包括：
+    - ❌ 图片（Figure）中的文字（如图表标签、坐标轴文字等）
+    - ❌ 表格（Table）中的文字（如单元格内容、表头文字等）
+    - ❌ 图片和表格的标题（Figure X:, Table X:）——这些会单独处理\
+    - ❌ 页眉页脚
+ 
+ 2. **只提取以下文字内容**：
+    - ✓ 标题（Title, Section headers等）
+    - ✓ 正文段落
+    - ✓ 摘要（Abstract）
+    - ✓ 引言（Introduction）
+    - ✓ 方法描述
+    - ✓ 结果讨论
+    - ✓ 结论
+    - ✓ 参考文献引用标记
+ 
+ 3. **阅读顺序要求**（重要）：
+    - 如果页面是**双栏布局**（左右两栏）：
+      * 先完整提取**左栏**所有内容（从上到下）
+      * 然后提取**右栏**所有内容（从上到下）
+      * 不要混排左右栏的内容
+    - 如果页面是**单栏布局**：
+      * 按正常从上到下顺序提取
+ 
+ 4. **格式要求**：
+    - 使用Markdown格式
+    - 标题用 # ## ### 标记
+    - 段落之间保留空行
+    - 数学公式保留 LaTeX 格式 $...$ 或 $$...$$
+ 
+ 5. **标注插图和表格位置**：
+    - 在插图出现的位置标记：[FIGURE: Figure 1]
+    - 在表格出现的位置标记：[TABLE: Table 1]
+    - 但**不要提取图表内部的文字**
+ 
+ 请直接返回提取的文本，使用Markdown格式。不要添加解释。"""
         
-        raw_text = self.api_client.call_with_image(image_path, prompt, max_tokens=4096)
+        raw_text = ""
+        try:
+            raw_text = self.api_client.call_with_image(image_path, prompt, max_tokens=4096)
+        except Exception as e:
+            print(f"    ⚠️ API调用失败: {e}")
+            raise
         
         # 保存原始提取结果
-        self.save_intermediate_file(
-            "01_raw_extracted", 
-            f"page_{page_num:03d}.md", 
-            raw_text
-        )
+        try:
+            self.save_intermediate_file(
+                "01_raw_extracted", 
+                f"page_{page_num:03d}.md", 
+                raw_text
+            )
+        except Exception as e:
+            print(f"    ⚠️ 保存原始提取结果失败: {e}")
         
         return raw_text
     
@@ -358,71 +366,93 @@ class AcademicPDFReader:
         
         inserted_count = 0
         
-        # 替换 [FIGURE: X] 标记
-        for fig in figures:
-            fig_id = fig["id"]
-            # 多种可能的标记格式
-            patterns = [
-                rf'\[FIGURE:\s*{re.escape(fig_id)}\]',
-                rf'\[FIGURE:\s*{re.escape(fig_id.replace(" ", ""))}\]',
-                rf'\[FIGURE:\s*{re.escape(fig_id.replace("Figure ", "Fig. "))}\]',
-            ]
-            
-            for pattern in patterns:
-                if re.search(pattern, markdown, re.IGNORECASE):
-                    img_ref = f'\n\n![{fig_id}: {fig.get("title", "")}]({fig["path"]})\n\n'
-                    markdown = re.sub(pattern, img_ref, markdown, flags=re.IGNORECASE, count=1)
-                    inserted_count += 1
-                    print(f"    ✓ 已插入 {fig_id}")
-                    break
-            else:
-                # 如果标记没找到，在提到figure的文本位置插入
-                text_patterns = [
-                    rf'{re.escape(fig_id)}[\s\.,;:]',
-                    rf'{re.escape(fig_id.replace(" ", ""))}[\s\.,;:]',
+        try:
+            # 替换 [FIGURE: X] 标记
+            for fig in figures:
+                fig_id = fig["id"]
+                # 多种可能的标记格式
+                patterns = [
+                    r'\[FIGURE:\s*' + re.escape(fig_id) + r'\]',
+                    r'\[FIGURE:\s*' + re.escape(fig_id.replace(" ", "")) + r'\]',
+                    r'\[FIGURE:\s*' + re.escape(fig_id.replace("Figure ", "Fig. ")) + r'\]',
                 ]
-                for text_pattern in text_patterns:
-                    match = re.search(text_pattern, markdown, re.IGNORECASE)
-                    if match:
-                        insert_pos = match.start()
-                        img_ref = f'\n\n![{fig_id}: {fig.get("title", "")}]({fig["path"]})\n\n'
-                        markdown = markdown[:insert_pos] + img_ref + markdown[insert_pos:]
-                        inserted_count += 1
-                        print(f"    ✓ 已在文本位置插入 {fig_id}")
-                        break
-        
-        # 替换 [TABLE: X] 标记
-        for tab in tables:
-            tab_id = tab["id"]
-            patterns = [
-                rf'\[TABLE:\s*{re.escape(tab_id)}\]',
-                rf'\[TABLE:\s*{re.escape(tab_id.replace(" ", ""))}\]',
-            ]
+                
+                for pattern in patterns:
+                    try:
+                        if re.search(pattern, markdown, re.IGNORECASE):
+                            img_ref = '\n\n![{0}: {1}]({2})\n\n'.format(fig_id, fig.get("title", ""), fig["path"])
+                            markdown = re.sub(pattern, img_ref, markdown, flags=re.IGNORECASE, count=1)
+                            inserted_count += 1
+                            print(f"    ✓ 已插入 {fig_id}")
+                            break
+                    except re.error as e:
+                        print(f"    ⚠️ 正则表达式错误 {fig_id}: {e}")
+                        continue
+                else:
+                    # 如果标记没找到，在提到figure的文本位置插入
+                    text_patterns = [
+                        re.escape(fig_id) + r'[\s\.,;:]',
+                        re.escape(fig_id.replace(" ", "")) + r'[\s\.,;:]',
+                    ]
+                    for text_pattern in text_patterns:
+                        try:
+                            match = re.search(text_pattern, markdown, re.IGNORECASE)
+                            if match:
+                                insert_pos = match.start()
+                                img_ref = '\n\n![{0}: {1}]({2})\n\n'.format(fig_id, fig.get("title", ""), fig["path"])
+                                markdown = markdown[:insert_pos] + img_ref + markdown[insert_pos:]
+                                inserted_count += 1
+                                print(f"    ✓ 已在文本位置插入 {fig_id}")
+                                break
+                        except re.error as e:
+                            print(f"    ⚠️ 正则表达式错误 {fig_id}: {e}")
+                            continue
             
-            for pattern in patterns:
-                if re.search(pattern, markdown, re.IGNORECASE):
-                    img_ref = f'\n\n![{tab_id}: {tab.get("title", "")}]({tab["path"]})\n\n'
-                    markdown = re.sub(pattern, img_ref, markdown, flags=re.IGNORECASE, count=1)
-                    inserted_count += 1
-                    print(f"    ✓ 已插入 {tab_id}")
-                    break
-            else:
-                # 如果没找到标记，在文本中插入
-                text_patterns = [
-                    rf'{re.escape(tab_id)}[\s\.,;:]',
-                    rf'{re.escape(tab_id.replace(" ", ""))}[\s\.,;:]',
+            # 替换 [TABLE: X] 标记
+            for tab in tables:
+                tab_id = tab["id"]
+                patterns = [
+                    r'\[TABLE:\s*' + re.escape(tab_id) + r'\]',
+                    r'\[TABLE:\s*' + re.escape(tab_id.replace(" ", "")) + r'\]',
                 ]
-                for text_pattern in text_patterns:
-                    match = re.search(text_pattern, markdown, re.IGNORECASE)
-                    if match:
-                        insert_pos = match.start()
-                        img_ref = f'\n\n![{tab_id}: {tab.get("title", "")}]({tab["path"]})\n\n'
-                        markdown = markdown[:insert_pos] + img_ref + markdown[insert_pos:]
-                        inserted_count += 1
-                        print(f"    ✓ 已在文本位置插入 {tab_id}")
-                        break
-        
-        print(f"    总计插入 {inserted_count} 个图片/表格")
+                
+                for pattern in patterns:
+                    try:
+                        if re.search(pattern, markdown, re.IGNORECASE):
+                            img_ref = '\n\n![{0}: {1}]({2})\n\n'.format(tab_id, tab.get("title", ""), tab["path"])
+                            markdown = re.sub(pattern, img_ref, markdown, flags=re.IGNORECASE, count=1)
+                            inserted_count += 1
+                            print(f"    ✓ 已插入 {tab_id}")
+                            break
+                    except re.error as e:
+                        print(f"    ⚠️ 正则表达式错误 {tab_id}: {e}")
+                        continue
+                else:
+                    # 如果没找到标记，在文本中插入
+                    text_patterns = [
+                        re.escape(tab_id) + r'[\s\.,;:]',
+                        re.escape(tab_id.replace(" ", "")) + r'[\s\.,;:]',
+                    ]
+                    for text_pattern in text_patterns:
+                        try:
+                            match = re.search(text_pattern, markdown, re.IGNORECASE)
+                            if match:
+                                insert_pos = match.start()
+                                img_ref = '\n\n![{0}: {1}]({2})\n\n'.format(tab_id, tab.get("title", ""), tab["path"])
+                                markdown = markdown[:insert_pos] + img_ref + markdown[insert_pos:]
+                                inserted_count += 1
+                                print(f"    ✓ 已在文本位置插入 {tab_id}")
+                                break
+                        except re.error as e:
+                            print(f"    ⚠️ 正则表达式错误 {tab_id}: {e}")
+                            continue
+            
+            print(f"    总计插入 {inserted_count} 个图片/表格")
+            
+        except Exception as e:
+            print(f"    ⚠️ 插入图片引用时出错: {e}")
+            import traceback
+            traceback.print_exc()
         
         return markdown
     
@@ -436,25 +466,50 @@ class AcademicPDFReader:
         """处理单页：提取 + 插入图片"""
         print(f"\n📖 正在处理第 {page_num}/{total_pages} 页...")
         
+        figures = []
+        tables = []
+        raw_text = ""
+        processed_markdown = ""
+        
         # 步骤1：提取插图和表格
-        figures, tables = self.extract_figures_and_tables(
-            image_path, page_num, output_dir
-        )
+        try:
+            figures, tables = self.extract_figures_and_tables(
+                image_path, page_num, output_dir
+            )
+        except Exception as e:
+            print(f"  ⚠️  提取插图和表格时出错: {e}")
+            import traceback
+            traceback.print_exc()
         
         # 步骤2：提取英文文本
-        raw_text = self.extract_text_from_page(image_path, page_num, total_pages)
+        try:
+            raw_text = self.extract_text_from_page(image_path, page_num, total_pages)
+        except Exception as e:
+            print(f"  ⚠️  提取英文文本时出错: {e}")
+            import traceback
+            traceback.print_exc()
+            raw_text = f"# Page {page_num}\n\n无法提取文本内容。"
         
         # 步骤3：为该页插入图片引用
-        processed_markdown = self.insert_image_references_for_page(
-            raw_text, figures, tables, page_num
-        )
+        try:
+            processed_markdown = self.insert_image_references_for_page(
+                raw_text, figures, tables, page_num
+            )
+        except Exception as e:
+            print(f"  ⚠️  插入图片引用时出错: {e}")
+            import traceback
+            traceback.print_exc()
+            processed_markdown = raw_text
         
         # 保存带图片的页面
-        self.save_intermediate_file(
-            "02_with_images",
-            f"page_{page_num:03d}.md",
-            processed_markdown
-        )
+        try:
+            self.save_intermediate_file(
+                "02_with_images",
+                f"page_{page_num:03d}.md",
+                processed_markdown
+            )
+        except Exception as e:
+            print(f"  ⚠️  保存中间结果时出错: {e}")
         
         result = PageContent(
             page_number=page_num,
@@ -521,13 +576,98 @@ class AcademicPDFReader:
         all_figures = []
         all_tables = []
         
+        # 检查已处理的页面（断点续传）
+        processed_pages = set()
+        if self.save_intermediate and self.intermediate_dir:
+            with_images_dir = os.path.join(self.intermediate_dir, "02_with_images")
+            if os.path.exists(with_images_dir):
+                for f in os.listdir(with_images_dir):
+                    if f.startswith("page_") and f.endswith(".md"):
+                        match = re.match(r"page_(\d+)\.md", f)
+                        if match:
+                            page_num = int(match.group(1))
+                            processed_pages.add(page_num)
+        
+        if processed_pages:
+            print(f"\n🔄 检测到 {len(processed_pages)} 页已处理，将从第 {max(processed_pages) + 1} 页继续处理")
+            print(f"   已处理页面: {sorted(processed_pages)}")
+        
         for i, image_path in enumerate(image_paths, 1):
-            page_content = self.process_single_page(
-                image_path, i, total_pages, output_dir
-            )
-            all_pages_content.append(page_content)
-            all_figures.extend(page_content.figures)
-            all_tables.extend(page_content.tables)
+            if i in processed_pages:
+                print(f"\n⏭️  跳过已处理的第 {i} 页")
+                # 加载已处理的页面内容
+                if self.save_intermediate and self.intermediate_dir:
+                    with_images_dir = os.path.join(self.intermediate_dir, "02_with_images")
+                    existing_file = os.path.join(with_images_dir, f"page_{i:03d}.md")
+                    if os.path.exists(existing_file):
+                        with open(existing_file, "r", encoding="utf-8") as f:
+                            processed_markdown = f.read()
+                        
+                        # 尝试提取图片信息
+                        figures_dir = os.path.join(output_dir, "figures")
+                        tables_dir = os.path.join(output_dir, "tables")
+                        figures = []
+                        tables = []
+                        
+                        # 扫描该页的图片文件
+                        if os.path.exists(figures_dir):
+                            for f in os.listdir(figures_dir):
+                                if f.startswith(f"page{i:03d}_") and f.endswith(".png"):
+                                    fig_id = f.replace(f"page{i:03d}_", "").replace(".png", "")
+                                    figures.append({
+                                        "id": fig_id,
+                                        "path": f"figures/{f}",
+                                        "filename": f,
+                                        "title": "",
+                                        "page": i
+                                    })
+                        
+                        if os.path.exists(tables_dir):
+                            for f in os.listdir(tables_dir):
+                                if f.startswith(f"page{i:03d}_") and f.endswith(".png"):
+                                    tab_id = f.replace(f"page{i:03d}_", "").replace(".png", "")
+                                    tables.append({
+                                        "id": tab_id,
+                                        "path": f"tables/{f}",
+                                        "filename": f,
+                                        "title": "",
+                                        "page": i
+                                    })
+                        
+                        page_content = PageContent(
+                            page_number=i,
+                            image_path=image_path,
+                            processed_markdown=processed_markdown,
+                            figures=figures,
+                            tables=tables
+                        )
+                        all_pages_content.append(page_content)
+                        all_figures.extend(figures)
+                        all_tables.extend(tables)
+                continue
+            
+            page_content = None
+            max_page_retries = 3
+            
+            for retry in range(max_page_retries):
+                try:
+                    page_content = self.process_single_page(
+                        image_path, i, total_pages, output_dir
+                    )
+                    break
+                except Exception as e:
+                    print(f"  ❌ 第 {i} 页处理失败 (尝试 {retry+1}/{max_page_retries}): {e}")
+                    if retry < max_page_retries - 1:
+                        print(f"  🔄 正在重新处理第 {i} 页...")
+                        time.sleep(2)
+                    else:
+                        print(f"  ⚠️  第 {i} 页处理失败次数过多，跳过该页")
+                        continue
+            
+            if page_content:
+                all_pages_content.append(page_content)
+                all_figures.extend(page_content.figures)
+                all_tables.extend(page_content.tables)
         
         # 步骤4：合并所有带图片的页面
         print("\n" + "=" * 70)
