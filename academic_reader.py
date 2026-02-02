@@ -27,7 +27,6 @@ from dataclasses import dataclass, field
 import time
 from datetime import datetime
 
-from pdf2image import convert_from_path
 from PIL import Image
 import requests
 
@@ -163,23 +162,6 @@ class AcademicPDFReader:
             f.write(content)
         
         return filepath
-    
-    def pdf_to_images(self, pdf_path: str, output_dir: str, dpi: int = 200) -> List[str]:
-        """将PDF转换为图片"""
-        print(f"📄 正在转换PDF: {pdf_path}")
-        
-        os.makedirs(output_dir, exist_ok=True)
-        images = convert_from_path(pdf_path, dpi=dpi)
-        
-        image_paths = []
-        for i, image in enumerate(images, 1):
-            image_path = os.path.join(output_dir, f"page_{i:03d}.png")
-            image.save(image_path, "PNG")
-            image_paths.append(image_path)
-            print(f"  ✓ 已保存第 {i}/{len(images)} 页")
-        
-        print(f"✅ PDF转换完成，共 {len(images)} 页\n")
-        return image_paths
     
     def extract_figures_and_tables(
         self, 
@@ -319,7 +301,8 @@ class AcademicPDFReader:
 1. **只提取正文文字**，不包括：
    - ❌ 图片（Figure）中的文字（如图表标签、坐标轴文字等）
    - ❌ 表格（Table）中的文字（如单元格内容、表头文字等）
-   - ❌ 图片和表格的标题（Figure X:, Table X:）——这些会单独处理
+   - ❌ 图片和表格的标题（Figure X:, Table X:）——这些会单独处理\
+   - ❌ 页眉页脚
 
 2. **只提取以下文字内容**：
    - ✓ 标题（Title, Section headers等）
@@ -330,7 +313,6 @@ class AcademicPDFReader:
    - ✓ 结果讨论
    - ✓ 结论
    - ✓ 参考文献引用标记
-   - ✓ 页眉页脚信息（作者、会议、页码等）
 
 3. **阅读顺序要求**（重要）：
    - 如果页面是**双栏布局**（左右两栏）：
@@ -495,27 +477,40 @@ class AcademicPDFReader:
         markdown = markdown.strip()
         return markdown
     
-    def process_pdf(self, pdf_path: str, output_dir: str, dpi: int = 200) -> str:
-        """处理完整PDF的主流程"""
+    def process_images(self, images_dir: str, output_dir: str) -> str:
+        """处理图片目录生成Markdown
+        
+        Args:
+            images_dir: 页面图片目录路径（包含 page_*.png 文件）
+            output_dir: 输出目录
+        """
         print("=" * 70)
         print("📚 学术PDF转Markdown工作流（英文提取版）")
         print("=" * 70)
         print("\n工作流：")
-        print("  1. 提取所有页面插图和表格")
-        print("  2. 提取所有页面英文文本（跳过图表文字）")
-        print("  3. 每页立即插入对应的图片/表格引用")
-        print("  4. 合并所有带图片的页面成完整英文文档\n")
+        print("  1. 从 pages/ 目录读取所有页面图片")
+        print("  2. 提取每页插图和表格")
+        print("  3. 提取每页英文文本（跳过图表文字）")
+        print("  4. 每页立即插入对应的图片/表格引用")
+        print("  5. 合并所有带图片的页面成完整英文文档\n")
         
-        if not os.path.exists(pdf_path):
-            raise FileNotFoundError(f"PDF文件不存在: {pdf_path}")
+        # 验证图片目录
+        if not os.path.exists(images_dir):
+            raise FileNotFoundError(f"图片目录不存在: {images_dir}\n请先运行: python pdf_to_images.py paper.pdf -o {output_dir}")
+        
+        # 获取所有图片文件
+        image_files = sorted(Path(images_dir).glob("page_*.png"))
+        if not image_files:
+            raise FileNotFoundError(f"目录中没有 page_*.png 文件: {images_dir}\n请先运行: python pdf_to_images.py paper.pdf -o {output_dir}")
+        
+        image_paths = [str(f) for f in image_files]
+        total_pages = len(image_paths)
+        
+        print(f"📂 找到 {total_pages} 页图片")
+        print(f"   目录: {images_dir}")
         
         # 设置中间结果目录
         self.setup_intermediate_dirs(output_dir)
-        
-        # 步骤1：PDF转图片
-        images_dir = os.path.join(output_dir, "pages")
-        image_paths = self.pdf_to_images(pdf_path, images_dir, dpi=dpi)
-        total_pages = len(image_paths)
         
         # 步骤2-3：逐页提取并立即插入图片
         print("\n" + "=" * 70)
@@ -587,14 +582,12 @@ def main():
     import argparse
     
     default_output = os.getenv("OUTPUT_DIR", "./output")
-    default_dpi = int(os.getenv("DPI", "200"))
     
     parser = argparse.ArgumentParser(
         description="学术PDF转Markdown工作流（英文提取版）"
     )
-    parser.add_argument("pdf_path", help="输入PDF文件路径")
-    parser.add_argument("-o", "--output", default=default_output, help="输出目录")
-    parser.add_argument("--dpi", type=int, default=default_dpi, help="PDF转图片的DPI")
+    parser.add_argument("images_dir", help="页面图片目录路径（包含 page_*.png 文件，如 output/pages）")
+    parser.add_argument("-o", "--output", default=default_output, help="输出目录（默认: ./output）")
     parser.add_argument("--no-intermediate", action="store_true", help="不保存中间结果")
     
     # API配置
@@ -617,9 +610,9 @@ def main():
         save_intermediate=not args.no_intermediate
     )
     
-    # 处理PDF
+    # 处理图片
     try:
-        output_file = reader.process_pdf(args.pdf_path, args.output, dpi=args.dpi)
+        output_file = reader.process_images(args.images_dir, args.output)
         print(f"\n🎉 成功生成英文Markdown文件: {output_file}")
     except Exception as e:
         print(f"\n❌ 处理失败: {e}")
